@@ -51,10 +51,8 @@ class GridWorldEnv(gym.Env):
         self.clock = None
 
     def _get_obs(self):
-        return {
-                "distance": np.linalg.norm(
-                self._agent_location - self._target_location, ord=1
-                ), 
+        return {"agent": self._agent_location, 
+                "distance": self._target_location, 
                 "agent_battery" : self._agent_battery,
                 "time_remaining" : self._time_remaining
                 }
