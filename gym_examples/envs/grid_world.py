@@ -61,7 +61,9 @@ class GridWorldEnv(gym.Env):
         return {
             "distance": np.linalg.norm(
                 self._agent_location - self._target_location, ord=1
-            )
+            ),
+            "agent_battery" : self._agent_battery,
+            "time_remaining" : self._time_remaining
         }
 
     def reset(self, seed=None, options=None):
