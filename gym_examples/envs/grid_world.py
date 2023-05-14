@@ -1,5 +1,5 @@
-import gym
-from gym import spaces
+import gymnasium as gym
+from gymnasium import spaces
 import pygame
 import numpy as np
 
@@ -7,7 +7,7 @@ import numpy as np
 class GridWorldEnv(gym.Env):
     metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 4}
 
-    def __init__(self, render_mode=None, size=5):
+    def __init__(self, render_mode=None, size=20):
         self.size = size  # The size of the square grid
         self.window_size = 512  # The size of the PyGame window
 
@@ -15,25 +15,27 @@ class GridWorldEnv(gym.Env):
         # Each location is encoded as an element of {0, ..., `size`}^2, i.e. MultiDiscrete([size, size]).
         self.observation_space = spaces.Dict(
             {
-                "agent": spaces.Box(0, size - 1, shape=(2,), dtype=int),
-                "target": spaces.Box(0, size - 1, shape=(2,), dtype=int),
+                "agent": spaces.Box(0, size - 1, shape=(2,), dtype=np.float32),
+                "target": spaces.Box(0, size - 1, shape=(2,), dtype=np.float32),
+                "agent_battery": spaces.Box(0, 100, shape=(1,), dtype=np.float32),
+                "time_remaining": spaces.Box(0, 100, shape=(1,), dtype=np.float32),
             }
         )
 
         # We have 4 actions, corresponding to "right", "up", "left", "down", "right"
-        self.action_space = spaces.Discrete(4)
+        self.action_space = spaces.Discrete(2)
 
         """
         The following dictionary maps abstract actions from `self.action_space` to 
         the direction we will walk in if that action is taken.
         I.e. 0 corresponds to "right", 1 to "up" etc.
         """
-        self._action_to_direction = {
-            0: np.array([1, 0]),
-            1: np.array([0, 1]),
-            2: np.array([-1, 0]),
-            3: np.array([0, -1]),
-        }
+        # self._action_to_direction = {
+        #     0: np.array([1, 0]),
+        #     1: np.array([0, 1]),
+        #     2: np.array([-1, 0]),
+        #     3: np.array([0, -1]),
+        # }
 
         assert render_mode is None or render_mode in self.metadata["render_modes"]
         self.render_mode = render_mode
@@ -49,7 +51,13 @@ class GridWorldEnv(gym.Env):
         self.clock = None
 
     def _get_obs(self):
-        return {"agent": self._agent_location, "target": self._target_location}
+        return {
+                "distance": np.linalg.norm(
+                self._agent_location - self._target_location, ord=1
+                ), 
+                "agent_battery" : self._agent_battery,
+                "time_remaining" : self._time_remaining
+                }
 
     def _get_info(self):
         return {
@@ -63,14 +71,16 @@ class GridWorldEnv(gym.Env):
         super().reset(seed=seed)
 
         # Choose the agent's location uniformly at random
-        self._agent_location = self.np_random.integers(0, self.size, size=2, dtype=int)
+        bat_w_x = np.random.rand() * self.size
+        bat_w_y = np.random.rand() * self.size
+        self._agent_location = np.array([bat_w_x, bat_w_y])
+        self._agent_battery = np.random.randint(50, 100)
 
-        # We will sample the target's location randomly until it does not coincide with the agent's location
-        self._target_location = self._agent_location
-        while np.array_equal(self._target_location, self._agent_location):
-            self._target_location = self.np_random.integers(
-                0, self.size, size=2, dtype=int
-            )
+        moth_w_x = np.random.rand() * self.size
+        moth_w_y = np.random.rand() * self.size
+        self._target_location = np.array([moth_w_x, moth_w_y])
+
+        self._time_remaining = 5
 
         observation = self._get_obs()
         info = self._get_info()
@@ -81,20 +91,34 @@ class GridWorldEnv(gym.Env):
         return observation, info
 
     def step(self, action):
-        # Map the action (element of {0,1,2,3}) to the direction we walk in
-        direction = self._action_to_direction[action]
-        # We use `np.clip` to make sure we don't leave the grid
-        self._agent_location = np.clip(
-            self._agent_location + direction, 0, self.size - 1
-        )
-        # An episode is done iff the agent has reached the target
-        terminated = np.array_equal(self._agent_location, self._target_location)
-        reward = 1 if terminated else 0  # Binary sparse rewards
+        dt = 0.1
+        move_drain_factor = 0.5
+        rest_drain_factor = 0.1
+
+        bat_vel = self._target_location - self._agent_location
+        if action == 1:
+            self._agent_location += bat_vel * dt
+            self._agent_battery -= move_drain_factor * np.linalg.norm(bat_vel)
+        elif action == 0:
+            self._agent_battery -= rest_drain_factor
+
+        reward = 0
+        terminated = 0
+        if np.linalg.norm(bat_vel) < 0.5:
+            reward = 1
+            terminated = 1
+        elif self._agent_battery < 0: 
+            reward = -1 
+            terminated = 1
+        
         observation = self._get_obs()
         info = self._get_info()
 
         if self.render_mode == "human":
             self._render_frame()
+
+
+        self._time_remaining -= dt
 
         return observation, reward, terminated, False, info
 
@@ -106,9 +130,13 @@ class GridWorldEnv(gym.Env):
         if self.window is None and self.render_mode == "human":
             pygame.init()
             pygame.display.init()
+            pygame.font.init()
+
             self.window = pygame.display.set_mode((self.window_size, self.window_size))
         if self.clock is None and self.render_mode == "human":
             self.clock = pygame.time.Clock()
+
+        font = pygame.font.SysFont('Comic Sans MS', 30)
 
         canvas = pygame.Surface((self.window_size, self.window_size))
         canvas.fill((255, 255, 255))
@@ -128,31 +156,22 @@ class GridWorldEnv(gym.Env):
         # Now we draw the agent
         pygame.draw.circle(
             canvas,
-            (0, 0, 255),
+            (0, 0, 0),
             (self._agent_location + 0.5) * pix_square_size,
             pix_square_size / 3,
         )
 
-        # Finally, add some gridlines
-        for x in range(self.size + 1):
-            pygame.draw.line(
-                canvas,
-                0,
-                (0, pix_square_size * x),
-                (self.window_size, pix_square_size * x),
-                width=3,
-            )
-            pygame.draw.line(
-                canvas,
-                0,
-                (pix_square_size * x, 0),
-                (pix_square_size * x, self.window_size),
-                width=3,
-            )
+        # Add in battery state 
+        battery_img = font.render(f"Battery Level: {round(self._agent_battery)}", True, (0, 0, 0))
+        time_img = font.render(f"Time remaining: {round(self._time_remaining, 2)}", True, (0, 0, 0))
 
         if self.render_mode == "human":
             # The following line copies our drawings from `canvas` to the visible window
             self.window.blit(canvas, canvas.get_rect())
+
+            # Add battery level 
+            self.window.blit(battery_img, (20, 20))
+            self.window.blit(time_img, (20, self.window_size - 20))
             pygame.event.pump()
             pygame.display.update()
 
@@ -168,3 +187,4 @@ class GridWorldEnv(gym.Env):
         if self.window is not None:
             pygame.display.quit()
             pygame.quit()
+
