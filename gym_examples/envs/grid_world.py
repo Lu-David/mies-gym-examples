@@ -52,7 +52,7 @@ class GridWorldEnv(gym.Env):
 
     def _get_obs(self):
         return {"agent": self._agent_location, 
-                "distance": self._target_location, 
+                "target": self._target_location, 
                 "agent_battery" : self._agent_battery,
                 "time_remaining" : self._time_remaining
                 }
@@ -98,7 +98,7 @@ class GridWorldEnv(gym.Env):
             self._agent_location += bat_vel * dt
             self._agent_battery -= move_drain_factor * np.linalg.norm(bat_vel)
         elif action == 0:
-            self._agent_battery -= rest_drain_factor
+            self._agent_battery -= rest_drain_factor * np.linalg.norm(bat_vel)
 
         reward = 0
         terminated = 0
